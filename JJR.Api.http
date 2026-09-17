@@ -1,0 +1,6 @@
+@JJR.Api_HostAddress = http://localhost:5192
+
+GET {{JJR.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
