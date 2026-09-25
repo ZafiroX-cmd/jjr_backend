@@ -1,5 +1,6 @@
 using System.Text;
 using JJR.Api.Models;
+using JJR.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -11,6 +12,10 @@ var builder = WebApplication.CreateBuilder(args);
 // DbContext
 builder.Services.AddDbContext<JjrDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Registro de Servicios
+builder.Services.AddHttpClient<ApiSunatService>();
+builder.Services.AddScoped<IUsuarioService, UsuarioService>(); // <--- SERVICIO REGISTRADO AQUÍ
 
 // CORS
 builder.Services.AddCors(options =>
@@ -47,8 +52,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         ClockSkew = TimeSpan.Zero
     };
 });
-
-builder.Services.AddHttpClient();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

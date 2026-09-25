@@ -1,4 +1,6 @@
-﻿using JJR.Api.Models;
+﻿using JJR.Api.Dtos;
+using JJR.Api.Models;
+using JJR.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -46,6 +48,13 @@ namespace JJR.Api.Controllers
                 })
                 .ToListAsync();
 
+            // Obtenemos todos los pasajeIds ocupados para consultar sus comprobantes
+            var pasajeIds = viaje.Pasajes.Where(p => p.Estado != "Anulado").Select(p => p.PasajeId).ToList();
+
+            var comprobantes = await _context.ComprobantesPagos
+                .Where(c => pasajeIds.Contains(c.PasajeId.Value))
+                .ToListAsync();
+
             var asientos = Enumerable.Range(1, 4).Select(numAsiento =>
             {
                 var pasaje = viaje.Pasajes.FirstOrDefault(p => p.NumeroAsiento == numAsiento && p.Estado != "Anulado");
@@ -59,6 +68,26 @@ namespace JJR.Api.Controllers
                     _ => "Asiento"
                 };
 
+                string? numeroComprobanteFormat = null;
+                string? tipoComprobanteFormat = null;
+
+                if (pasaje != null)
+                {
+                    var comprobante = comprobantes.FirstOrDefault(c => c.PasajeId == pasaje.PasajeId);
+                    if (comprobante != null)
+                    {
+                        // Formatea la Serie y el Número correlativo de 8 dígitos
+                        numeroComprobanteFormat = $"{comprobante.Serie} - {comprobante.Numero:D8}";
+
+                        tipoComprobanteFormat = comprobante.Documento.ToLower() switch
+                        {
+                            "factura" => "FACTURA",
+                            "boleta" => "BOLETA",
+                            _ => "NOTA_VENTA"
+                        };
+                    }
+                }
+
                 return new
                 {
                     numeroAsiento = numAsiento,
@@ -70,8 +99,14 @@ namespace JJR.Api.Controllers
                     montoAdelanto = pasaje?.MontoAdelanto ?? 0,
                     saldoPendiente = pasaje != null ? (pasaje.Precio - pasaje.MontoAdelanto) : 0,
                     medioPago = pasaje?.MedioPago,
+                    numeroOperacion = pasaje?.NumeroOperacion,
                     comprobantePagoUrl = pasaje?.ComprobantePagoUrl,
                     comprobanteEmitido = pasaje?.ComprobanteEmitido ?? false,
+
+                    // Datos para el ticket de impresión
+                    numeroComprobante = numeroComprobanteFormat,
+                    tipoComprobante = tipoComprobanteFormat,
+
                     pasajeroNombre = pasaje != null
                         ? (string.IsNullOrEmpty(pasaje.ClientePasajero.Nombres)
                             ? pasaje.ClientePasajero.RazonSocial
@@ -97,7 +132,9 @@ namespace JJR.Api.Controllers
 
         // POST: api/Pasajes
         [HttpPost]
-        public async Task<IActionResult> VenderOPasaje([FromForm] VentaPasajeFormDto model)
+        public async Task<IActionResult> VenderOPasaje(
+            [FromForm] VentaPasajeFormDto model,
+            [FromServices] ApiSunatService apiSunat)
         {
             var userOficinaClaim = User.FindFirst("OficinaId")?.Value;
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -127,7 +164,7 @@ namespace JJR.Api.Controllers
                 return BadRequest(new { mensaje = "La parada de bajada debe ser posterior a la de subida." });
             }
 
-            // 3. Procesar Voucher para pagos digitales 
+            // 3. Procesar Voucher para pagos digitales
             string? voucherUrl = null;
             if (model.MedioPago != "EFECTIVO")
             {
@@ -159,11 +196,9 @@ namespace JJR.Api.Controllers
                 if (userObj != null) usuarioId = userObj.UsuarioId;
             }
 
-            // 4. Lógica de Cobro y Estado
+            // 4. Lógica de Cobro y Estado del Pasaje
             string tipoOp = model.TipoOperacion.ToUpper() == "RESERVA" ? "RESERVA" : "VENTA_DIRECTA";
             decimal cobrado = tipoOp == "RESERVA" ? model.MontoAdelanto : model.Precio;
-
-            
             string estadoFinal = (tipoOp == "VENTA_DIRECTA" || cobrado >= model.Precio) ? "Emitido" : "Reservado";
 
             var nuevoPasaje = new Pasaje
@@ -188,6 +223,21 @@ namespace JJR.Api.Controllers
                 CreadoEn = DateTime.UtcNow
             };
 
+            // 5. Emisión de Comprobante Solo si es VENTA DIRECTA
+            string? tipoCompUpper = model.TipoComprobante?.ToUpper();
+            bool solicitaComprobante = tipoOp == "VENTA_DIRECTA" && !string.IsNullOrEmpty(tipoCompUpper);
+
+            if (solicitaComprobante)
+            {
+                var cliente = await _context.Clientes.FindAsync(model.ClientePasajeroId);
+                if (cliente == null)
+                    return BadRequest(new { mensaje = "No se encontró el cliente registrado para emitir el comprobante." });
+
+                var emitido = await GenerarComprobanteInternoOSunat(nuevoPasaje, cliente, tipoCompUpper!, oficinaEmisionId, usuarioId, apiSunat);
+                if (!emitido.success)
+                    return BadRequest(new { mensaje = emitido.error });
+            }
+
             _context.Pasajes.Add(nuevoPasaje);
             await _context.SaveChangesAsync();
 
@@ -196,13 +246,17 @@ namespace JJR.Api.Controllers
                 mensaje = tipoOp == "RESERVA" ? "Reserva registrada correctamente." : "Venta registrada exitosamente.",
                 pasajeId = nuevoPasaje.PasajeId,
                 estado = nuevoPasaje.Estado,
+                comprobanteEmitido = nuevoPasaje.ComprobanteEmitido,
                 puedeEmitirComprobante = cobrado >= model.Precio
             });
         }
 
         // PATCH: api/Pasajes/{id}/completar-pago
         [HttpPatch("{id}/completar-pago")]
-        public async Task<IActionResult> CompletarPagoReserva(Guid id, [FromForm] LiquidarReservaDto model)
+        public async Task<IActionResult> CompletarPagoReserva(
+            Guid id,
+            [FromForm] LiquidarReservaDto model,
+            [FromServices] ApiSunatService apiSunat)
         {
             var pasaje = await _context.Pasajes.FindAsync(id);
             if (pasaje == null) return NotFound(new { mensaje = "El pasaje no existe." });
@@ -237,9 +291,32 @@ namespace JJR.Api.Controllers
             pasaje.MontoAdelanto = pasaje.Precio;
             pasaje.Estado = "Emitido";
 
+            // EMISIÓN DEL COMPROBANTE AL LIQUIDAR LA RESERVA
+            if (!string.IsNullOrEmpty(model.TipoComprobante))
+            {
+                var cliente = await _context.Clientes.FindAsync(pasaje.ClientePasajeroId);
+                if (cliente == null)
+                    return BadRequest(new { mensaje = "Cliente no encontrado para emitir comprobante." });
+
+                var userOficinaClaim = User.FindFirst("OficinaId")?.Value;
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                int? oficinaEmisionId = int.TryParse(userOficinaClaim, out int ofId) ? ofId : pasaje.OficinaEmisionId;
+
+                if (!Guid.TryParse(userIdClaim, out Guid usuarioId))
+                {
+                    usuarioId = pasaje.CreadoPorUsuarioId;
+                }
+
+                var res = await GenerarComprobanteInternoOSunat(pasaje, cliente, model.TipoComprobante.ToUpper(), oficinaEmisionId, usuarioId, apiSunat);
+                if (!res.success)
+                {
+                    return BadRequest(new { mensaje = res.error });
+                }
+            }
+
             await _context.SaveChangesAsync();
 
-            return Ok(new { mensaje = "Reserva saldada exitosamente. Ya puede emitir la Boleta/Factura o Nota de Venta." });
+            return Ok(new { mensaje = "Reserva saldada exitosamente y comprobante generado." });
         }
 
         // DELETE: api/Pasajes/{id}/cancelar
@@ -254,6 +331,147 @@ namespace JJR.Api.Controllers
 
             return Ok(new { mensaje = "Pasaje/Reserva anulado. El asiento ha sido liberado." });
         }
+
+        #region --- MÉTODO AUXILIAR DE EMISIÓN DE COMPROBANTES ---
+
+        private async Task<(bool success, string? error)> GenerarComprobanteInternoOSunat(
+            Pasaje pasaje, Cliente cliente, string tipoCompUpper, int? oficinaEmisionId, Guid usuarioId, ApiSunatService apiSunat)
+        {
+            bool esFactura = tipoCompUpper == "FACTURA";
+            bool esNotaVenta = tipoCompUpper == "NOTA_VENTA" || tipoCompUpper == "NOTA_DE_VENTA";
+            string docTipo = esNotaVenta ? "nota_de_venta" : (esFactura ? "factura" : "boleta");
+
+            if (esFactura && cliente.NumeroDocumento.Length != 11)
+            {
+                return (false, "Para emitir una Factura Electrónica se requiere un RUC válido de 11 dígitos.");
+            }
+
+            string sufijoOficina = oficinaEmisionId switch
+            {
+                1 => "001", // Trujillo
+                2 => "002", // Chillia
+                3 => "003", // Deliciana
+                _ => "001"
+            };
+
+            string prefijoTipo = esNotaVenta ? "NV" : (esFactura ? "F" : "B");
+            string serieBuscada = $"{prefijoTipo}{sufijoOficina}";
+
+            var serieObj = await _context.SeriesComprobantes
+                .FirstOrDefaultAsync(s => s.TipoDocumento.ToLower() == docTipo &&
+                                          s.Serie == serieBuscada &&
+                                          s.Activo);
+
+            if (serieObj == null)
+            {
+                return (false, $"No existe una serie activa ({serieBuscada}) configurada para {docTipo} en esta oficina.");
+            }
+
+            int nuevoNumero = serieObj.UltimoNumero + 1;
+            serieObj.UltimoNumero = nuevoNumero;
+
+            decimal total = pasaje.Precio;
+            decimal montoGravado = Math.Round(total / 1.18m, 2);
+            decimal montoIgv = total - montoGravado;
+            decimal valorUnitario6Dec = Math.Round(total / 1.18m, 6);
+
+            DateTime ahora = DateTime.UtcNow.AddHours(-5); // UTC-5 (Perú)
+
+            ApiSunatResponseDto sunatResponse = new() { success = true, message = "Nota de Venta emitida internamente" };
+
+            if (!esNotaVenta)
+            {
+                var sunatPayload = new ApiSunatDocumentDto
+                {
+                    documento = docTipo,
+                    serie = serieObj.Serie,
+                    numero = nuevoNumero,
+                    fecha_de_emision = ahora.ToString("yyyy-MM-dd"),
+                    hora_de_emision = ahora.ToString("HH:mm:ss"),
+                    moneda = "PEN",
+                    tipo_operacion = "0101",
+                    cliente_tipo_de_documento = cliente.NumeroDocumento.Length == 11 ? "6" : "1",
+                    cliente_numero_de_documento = cliente.NumeroDocumento,
+                    cliente_denominacion = string.IsNullOrWhiteSpace(cliente.RazonSocial)
+                        ? $"{cliente.Nombres} {cliente.ApellidoPaterno} {cliente.ApellidoMaterno}".Trim()
+                        : cliente.RazonSocial,
+                    cliente_direccion = string.IsNullOrWhiteSpace(cliente.DireccionFiscal) ? "TRUJILLO" : cliente.DireccionFiscal,
+                    total = total.ToString("0.00"),
+                    items = new List<ApiSunatItemDto>
+                    {
+                        new ApiSunatItemDto
+                        {
+                            unidad_de_medida = "ZZ",
+                            codigo_interno = "PAS-001",
+                            descripcion = $"Pasaje de Transporte - Asiento #{pasaje.NumeroAsiento}",
+                            cantidad = "1",
+                            valor_unitario = valorUnitario6Dec.ToString("0.000000"),
+                            porcentaje_igv = "18",
+                            codigo_tipo_afectacion_igv = "10",
+                            nombre_tributo = "IGV"
+                        }
+                    }
+                };
+
+                sunatResponse = await apiSunat.EmitirComprobanteAsync(sunatPayload);
+            }
+
+            var nuevoComprobante = new ComprobantesPago
+            {
+                ComprobanteId = Guid.NewGuid(),
+                Documento = docTipo,
+                Serie = serieObj.Serie,
+                Numero = nuevoNumero,
+                FechaDeEmision = DateOnly.FromDateTime(ahora),
+                HoraDeEmision = TimeOnly.FromTimeSpan(ahora.TimeOfDay),
+                Moneda = "PEN",
+                TipoOperacion = "0101",
+                ClienteId = cliente.ClienteId,
+                ClienteTipoDeDocumento = cliente.NumeroDocumento.Length == 11 ? "6" : "1",
+                ClienteNumeroDeDocumento = cliente.NumeroDocumento,
+                ClienteDenominacion = string.IsNullOrWhiteSpace(cliente.RazonSocial)
+                    ? $"{cliente.Nombres} {cliente.ApellidoPaterno} {cliente.ApellidoMaterno}".Trim()
+                    : cliente.RazonSocial,
+                ClienteDireccion = string.IsNullOrWhiteSpace(cliente.DireccionFiscal) ? "TRUJILLO" : cliente.DireccionFiscal,
+                MontoGravado = montoGravado,
+                MontoIgv = montoIgv,
+                Total = total,
+                EstadoSunat = esNotaVenta ? "COMPLETADO" : (sunatResponse.success ? "ACEPTADO" : "RECHAZADO"),
+                RespuestaSunat = sunatResponse.message,
+                PdfUrl = sunatResponse.file_pdf,
+                XmlUrl = sunatResponse.file_xml,
+                PasajeId = pasaje.PasajeId,
+                UsuarioId = usuarioId,
+                CreadoEn = DateTime.UtcNow
+            };
+
+            _context.ComprobantesPagos.Add(nuevoComprobante);
+
+            var itemComprobante = new ItemsComprobante
+            {
+                ItemId = Guid.NewGuid(),
+                ComprobanteId = nuevoComprobante.ComprobanteId,
+                UnidadDeMedida = "ZZ",
+                CodigoInterno = "PAS-001",
+                Descripcion = $"Pasaje de Transporte - Asiento #{pasaje.NumeroAsiento}",
+                Cantidad = 1,
+                ValorUnitario = valorUnitario6Dec,
+                PorcentajeIgv = 18,
+                CodigoTipoAfectacionIgv = "10",
+                NombreTributo = "IGV"
+            };
+
+            _context.ItemsComprobantes.Add(itemComprobante);
+
+            if (sunatResponse.success)
+            {
+                pasaje.ComprobanteEmitido = true;
+            }
+
+            return (true, null);
+        }
+
+        #endregion
     }
 
     #region --- DTOs ---
@@ -267,11 +485,12 @@ namespace JJR.Api.Controllers
         public int OrigenParadaId { get; set; }
         public int DestinoParadaId { get; set; }
         public decimal Precio { get; set; }
-        public string TipoOperacion { get; set; } = "VENTA_DIRECTA"; 
+        public string TipoOperacion { get; set; } = "VENTA_DIRECTA";
         public decimal MontoAdelanto { get; set; } = 0.00m;
-        public string MedioPago { get; set; } = "EFECTIVO"; 
+        public string MedioPago { get; set; } = "EFECTIVO";
         public string? NumeroOperacion { get; set; }
         public IFormFile? VoucherFile { get; set; }
+        public string? TipoComprobante { get; set; } // "NOTA_VENTA", "BOLETA", "FACTURA"
     }
 
     public class LiquidarReservaDto
@@ -279,6 +498,7 @@ namespace JJR.Api.Controllers
         public decimal MontoPago { get; set; }
         public string MedioPago { get; set; } = "EFECTIVO";
         public IFormFile? VoucherFile { get; set; }
+        public string? TipoComprobante { get; set; } // "NOTA_VENTA", "BOLETA", "FACTURA"
     }
 
     #endregion

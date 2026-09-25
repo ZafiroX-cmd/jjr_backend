@@ -7,7 +7,7 @@ namespace JJR.Api.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize] // Requiere autenticación JWT
+    [Authorize]
     public class FlotaController : ControllerBase
     {
         private readonly JjrDbContext _context;
@@ -21,10 +21,18 @@ namespace JJR.Api.Controllers
 
         // GET: api/Flota/vehiculos
         [HttpGet("vehiculos")]
-        public async Task<IActionResult> GetVehiculos()
+        public async Task<IActionResult> GetVehiculos([FromQuery] int? oficinaId)
         {
-            var vehiculos = await _context.Vehiculos
+            var query = _context.Vehiculos
                 .Include(v => v.Socio)
+                .AsQueryable();
+
+            if (oficinaId.HasValue && oficinaId > 0)
+            {
+                query = query.Where(v => v.OficinaActualId == oficinaId.Value);
+            }
+
+            var vehiculos = await query
                 .OrderByDescending(v => v.Activo)
                 .ThenBy(v => v.Placa)
                 .Select(v => new
@@ -39,6 +47,7 @@ namespace JJR.Api.Controllers
                     v.RevisionTecnicaVencimiento,
                     v.Estado,
                     v.Activo,
+                    v.OficinaActualId,
                     SocioPropietario = v.Socio != null ? v.Socio.RazonSocialNombre : "Vehículo Propio (JJR S.A.C.)",
                     SocioId = v.SocioId,
                     SoatPorVencer = v.SoatVencimiento.HasValue && v.SoatVencimiento.Value <= DateOnly.FromDateTime(DateTime.Today.AddDays(15)),
@@ -68,6 +77,7 @@ namespace JJR.Api.Controllers
                 SocioId = model.SocioId,
                 SoatVencimiento = model.SoatVencimiento,
                 RevisionTecnicaVencimiento = model.RevisionTecnicaVencimiento,
+                OficinaActualId = model.OficinaActualId ?? 1, // Trujillo por defecto
                 Estado = "Disponible",
                 Activo = true
             };
@@ -101,6 +111,10 @@ namespace JJR.Api.Controllers
             vehiculo.SocioId = model.SocioId;
             vehiculo.SoatVencimiento = model.SoatVencimiento;
             vehiculo.RevisionTecnicaVencimiento = model.RevisionTecnicaVencimiento;
+            if (model.OficinaActualId.HasValue)
+            {
+                vehiculo.OficinaActualId = model.OficinaActualId;
+            }
 
             await _context.SaveChangesAsync();
 
@@ -131,9 +145,16 @@ namespace JJR.Api.Controllers
 
         // GET: api/Flota/conductores
         [HttpGet("conductores")]
-        public async Task<IActionResult> GetConductores()
+        public async Task<IActionResult> GetConductores([FromQuery] int? oficinaId)
         {
-            var conductores = await _context.Conductores
+            var query = _context.Conductores.AsQueryable();
+
+            if (oficinaId.HasValue && oficinaId > 0)
+            {
+                query = query.Where(c => c.OficinaActualId == oficinaId.Value);
+            }
+
+            var conductores = await query
                 .OrderByDescending(c => c.Activo)
                 .ThenBy(c => c.ApellidoPaterno)
                 .Select(c => new
@@ -149,6 +170,7 @@ namespace JJR.Api.Controllers
                     c.FechaVencimientoLicencia,
                     c.Telefono,
                     c.Activo,
+                    c.OficinaActualId,
                     LicenciaPorVencer = c.FechaVencimientoLicencia <= DateOnly.FromDateTime(DateTime.Today.AddDays(30))
                 })
                 .ToListAsync();
@@ -180,6 +202,7 @@ namespace JJR.Api.Controllers
                 CategoriaLicencia = model.CategoriaLicencia.ToUpper().Trim(),
                 FechaVencimientoLicencia = model.FechaVencimientoLicencia,
                 Telefono = model.Telefono?.Trim(),
+                OficinaActualId = model.OficinaActualId ?? 1,
                 Activo = true
             };
 
@@ -217,6 +240,10 @@ namespace JJR.Api.Controllers
             conductor.CategoriaLicencia = model.CategoriaLicencia.ToUpper().Trim();
             conductor.FechaVencimientoLicencia = model.FechaVencimientoLicencia;
             conductor.Telefono = model.Telefono?.Trim();
+            if (model.OficinaActualId.HasValue)
+            {
+                conductor.OficinaActualId = model.OficinaActualId;
+            }
 
             await _context.SaveChangesAsync();
 
@@ -330,6 +357,28 @@ namespace JJR.Api.Controllers
         }
 
         #endregion
+
+        #region --- OFICINAS ---
+
+        // GET: api/Flota/oficinas
+        [HttpGet("oficinas")]
+        public async Task<IActionResult> GetOficinas()
+        {
+            var oficinas = await _context.Oficinas
+                .Where(o => o.Activo)
+                .OrderBy(o => o.Nombre)
+                .Select(o => new
+                {
+                    OficinaId = o.OficinaId,
+                    Nombre = o.Nombre,
+                    Direccion = o.Direccion
+                })
+                .ToListAsync();
+
+            return Ok(oficinas);
+        }
+
+        #endregion
     }
 
     #region --- DTOs ---
@@ -342,6 +391,7 @@ namespace JJR.Api.Controllers
         public int CapacidadAsientos { get; set; }
         public decimal CapacidadCargaKg { get; set; }
         public Guid? SocioId { get; set; }
+        public int? OficinaActualId { get; set; }
         public DateOnly? SoatVencimiento { get; set; }
         public DateOnly? RevisionTecnicaVencimiento { get; set; }
     }
@@ -356,6 +406,7 @@ namespace JJR.Api.Controllers
         public string CategoriaLicencia { get; set; } = null!;
         public DateOnly FechaVencimientoLicencia { get; set; }
         public string? Telefono { get; set; }
+        public int? OficinaActualId { get; set; }
     }
 
     public class CambiarEstadoDto

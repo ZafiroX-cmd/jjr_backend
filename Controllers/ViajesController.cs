@@ -35,13 +35,11 @@ namespace JJR.Api.Controllers
                 .Include(v => v.OficinaOrigen)
                 .AsQueryable();
 
-            // Aislamiento de datos por Oficina según el Rol del usuario logueado
             bool esAdminOGerente = userRole.Equals("Administrador", StringComparison.OrdinalIgnoreCase) ||
                                   userRole.Equals("Gerente", StringComparison.OrdinalIgnoreCase);
 
             if (esAdminOGerente)
             {
-                // Si es Admin o Gerente y envía un filtro explícito de oficina, lo aplicamos
                 if (oficinaId.HasValue && oficinaId > 0)
                 {
                     query = query.Where(v => v.OficinaOrigenId == oficinaId.Value);
@@ -49,7 +47,6 @@ namespace JJR.Api.Controllers
             }
             else
             {
-                // Si es Recepcionista, se fuerza la oficina ligada a su perfil de usuario
                 if (int.TryParse(userOficinaClaim, out int userOficinaId))
                 {
                     query = query.Where(v => v.OficinaOrigenId == userOficinaId);
@@ -78,7 +75,6 @@ namespace JJR.Api.Controllers
                     PrecioPasaje = v.PrecioPasaje,
                     Estado = v.Estado,
                     ManifiestoCerrado = v.ManifiestoCerrado,
-                    // Aforo estricto de 4 asientos por camioneta
                     AsientosOcupados = v.Pasajes.Count(p => p.Estado != "Anulado"),
                     AsientosDisponibles = 4 - v.Pasajes.Count(p => p.Estado != "Anulado")
                 })
@@ -116,7 +112,33 @@ namespace JJR.Api.Controllers
                 oficinaOrigenIdFinal = userOficinaId;
             }
 
-            // 1. Validar que la camioneta no esté ocupada en otro viaje activo
+            // 1. Validar que el vehículo exista y esté físicamente en la oficina de origen
+            var vehiculoObj = await _context.Vehiculos.FindAsync(model.VehiculoId);
+            if (vehiculoObj == null)
+            {
+                return BadRequest(new { mensaje = "El vehículo seleccionado no existe." });
+            }
+
+            if (vehiculoObj.OficinaActualId.HasValue && vehiculoObj.OficinaActualId.Value != oficinaOrigenIdFinal)
+            {
+                var oficinaActual = await _context.Oficinas.FindAsync(vehiculoObj.OficinaActualId.Value);
+                string nombreOficinaActual = oficinaActual?.Nombre ?? $"Oficina #{vehiculoObj.OficinaActualId}";
+                return BadRequest(new { mensaje = $"La camioneta {vehiculoObj.Placa} no se encuentra en la oficina de origen seleccionada. Actualmente está en {nombreOficinaActual}." });
+            }
+
+            // 2. Validar que el conductor exista y esté físicamente en la oficina de origen
+            var conductorObj = await _context.Conductores.FindAsync(model.ConductorId);
+            if (conductorObj == null)
+            {
+                return BadRequest(new { mensaje = "El conductor seleccionado no existe." });
+            }
+
+            if (conductorObj.OficinaActualId.HasValue && conductorObj.OficinaActualId.Value != oficinaOrigenIdFinal)
+            {
+                return BadRequest(new { mensaje = $"El conductor {conductorObj.Nombres} {conductorObj.ApellidoPaterno} no se encuentra en la oficina de origen de este viaje." });
+            }
+
+            // 3. Validar que la camioneta no esté ocupada en otro viaje activo
             var vehiculoOcupado = await _context.Viajes.AnyAsync(v =>
                 v.VehiculoId == model.VehiculoId &&
                 (v.Estado == "Programado" || v.Estado == "En Ruta"));
@@ -126,7 +148,7 @@ namespace JJR.Api.Controllers
                 return BadRequest(new { mensaje = "La camioneta seleccionada ya tiene un viaje activo o programado." });
             }
 
-            // 2. Validar que el conductor no esté asignado a otro viaje activo
+            // 4. Validar que el conductor no esté asignado a otro viaje activo
             var conductorOcupado = await _context.Viajes.AnyAsync(v =>
                 v.ConductorId == model.ConductorId &&
                 (v.Estado == "Programado" || v.Estado == "En Ruta"));
@@ -159,7 +181,6 @@ namespace JJR.Api.Controllers
         [HttpPatch("{id}/estado")]
         public async Task<IActionResult> UpdateEstadoViaje(Guid id, [FromBody] UpdateEstadoDto model)
         {
-            // Incluimos Ruta, Vehículo y Conductor para poder actualizar la ubicación al finalizar
             var viaje = await _context.Viajes
                 .Include(v => v.Ruta)
                 .Include(v => v.Vehiculo)
@@ -176,10 +197,8 @@ namespace JJR.Api.Controllers
 
             viaje.Estado = model.Estado;
 
-            // --- LÓGICA DE UBICACIÓN FÍSICA ---
             if (model.Estado == "En Ruta")
             {
-                // El vehículo y conductor salen de la oficina de origen (se quedan en tránsito)
                 if (viaje.Vehiculo != null) viaje.Vehiculo.OficinaActualId = null;
                 if (viaje.Conductor != null) viaje.Conductor.OficinaActualId = null;
             }
@@ -188,14 +207,12 @@ namespace JJR.Api.Controllers
                 viaje.ManifiestoCerrado = true;
                 viaje.FechaLlegadaEstimada = DateTime.UtcNow;
 
-                // Buscar la oficina correspondiente al nombre del destino de la ruta
                 var destinoStr = viaje.Ruta.Destino.Trim().ToLower();
                 var oficinaDestino = await _context.Oficinas
                     .FirstOrDefaultAsync(o => o.Nombre.ToLower() == destinoStr);
 
                 if (oficinaDestino != null)
                 {
-                    // Reasignar vehículo y conductor a la nueva oficina
                     if (viaje.Vehiculo != null) viaje.Vehiculo.OficinaActualId = oficinaDestino.OficinaId;
                     if (viaje.Conductor != null) viaje.Conductor.OficinaActualId = oficinaDestino.OficinaId;
                 }
@@ -209,15 +226,22 @@ namespace JJR.Api.Controllers
 
         #region --- ENDPOINTS AUXILIARES ---
 
-        // GET: api/Viajes/recursos
+        // GET: api/Viajes/recursos?oficinaOrigenId=1
         [HttpGet("recursos")]
-        public async Task<IActionResult> GetRecursos()
+        public async Task<IActionResult> GetRecursos([FromQuery] int? oficinaOrigenId)
         {
             var userRole = User.FindFirst(ClaimTypes.Role)?.Value ?? string.Empty;
+            int? oficinaUsuarioClaim = int.TryParse(User.FindFirst("OficinaId")?.Value, out int id) ? id : null;
+
             bool esAdminOGerente = userRole.Equals("Administrador", StringComparison.OrdinalIgnoreCase) ||
                                   userRole.Equals("Gerente", StringComparison.OrdinalIgnoreCase);
 
-            int? oficinaUsuarioId = int.TryParse(User.FindFirst("OficinaId")?.Value, out int id) ? id : null;
+            // Determinar la oficina que se usará para filtrar vehículos y conductores
+            int? oficinaFiltro = oficinaOrigenId;
+            if (!esAdminOGerente || !oficinaFiltro.HasValue)
+            {
+                oficinaFiltro = oficinaFiltro ?? oficinaUsuarioClaim;
+            }
 
             var rutas = await _context.Rutas
                 .Where(r => r.Activo)
@@ -242,21 +266,33 @@ namespace JJR.Api.Controllers
                 })
                 .ToListAsync();
 
-            // Filtrar vehículos operativos/disponibles y que estén físicamente en la oficina del usuario
-            var vehiculos = await _context.Vehiculos
-                .Where(v => v.Activo && (v.Estado == "Operativo" || v.Estado == "Disponible"))
-                .Where(v => esAdminOGerente || v.OficinaActualId == oficinaUsuarioId)
-                .Select(v => new { v.VehiculoId, v.Placa, v.Marca })
+            // Consulta de Vehículos: Se exige que coincida con la oficina requerida
+            var queryVehiculos = _context.Vehiculos
+                .Where(v => v.Activo && (v.Estado == "Operativo" || v.Estado == "Disponible"));
+
+            if (oficinaFiltro.HasValue && oficinaFiltro.Value > 0)
+            {
+                queryVehiculos = queryVehiculos.Where(v => v.OficinaActualId == oficinaFiltro.Value || v.OficinaActualId == null);
+            }
+
+            var vehiculos = await queryVehiculos
+                .Select(v => new { v.VehiculoId, v.Placa, v.Marca, v.OficinaActualId })
                 .ToListAsync();
 
-            // Filtrar conductores que estén físicamente en la oficina del usuario
-            var conductores = await _context.Conductores
-                .Where(c => c.Activo)
-                .Where(c => esAdminOGerente || c.OficinaActualId == oficinaUsuarioId)
+            // Consulta de Conductores: Se exige que coincida con la oficina requerida
+            var queryConductores = _context.Conductores.Where(c => c.Activo);
+
+            if (oficinaFiltro.HasValue && oficinaFiltro.Value > 0)
+            {
+                queryConductores = queryConductores.Where(c => c.OficinaActualId == oficinaFiltro.Value || c.OficinaActualId == null);
+            }
+
+            var conductores = await queryConductores
                 .Select(c => new
                 {
                     c.ConductorId,
-                    Nombre = c.Nombres + " " + c.ApellidoPaterno + " " + c.ApellidoMaterno
+                    Nombre = c.Nombres + " " + c.ApellidoPaterno + " " + c.ApellidoMaterno,
+                    c.OficinaActualId
                 })
                 .ToListAsync();
 
