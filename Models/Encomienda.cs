@@ -20,6 +20,7 @@ public partial class Encomienda
     [StringLength(20)]
     public string CodigoSeguimiento { get; set; } = null!;
 
+
     [Column("viaje_id")]
     public Guid? ViajeId { get; set; }
 
@@ -67,8 +68,7 @@ public partial class Encomienda
     [Column("creado_en")]
     public DateTime CreadoEn { get; set; }
 
-    [InverseProperty("Encomienda")]
-    public virtual ICollection<ComprobantesPago> ComprobantesPagos { get; set; } = new List<ComprobantesPago>();
+
 
     [ForeignKey("DestinatarioId")]
     [InverseProperty("EncomiendaDestinatarios")]
@@ -85,4 +85,7 @@ public partial class Encomienda
     [ForeignKey("ViajeId")]
     [InverseProperty("Encomienda")]
     public virtual Viaje? Viaje { get; set; }
+
+    [InverseProperty("Encomienda")]
+    public virtual ICollection<ComprobantesPago> ComprobantesPagos { get; set; } = new List<ComprobantesPago>();
 }

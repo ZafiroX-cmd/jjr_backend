@@ -15,7 +15,9 @@ builder.Services.AddDbContext<JjrDbContext>(options =>
 
 // Registro de Servicios
 builder.Services.AddHttpClient<ApiSunatService>();
-builder.Services.AddScoped<IUsuarioService, UsuarioService>(); // <--- SERVICIO REGISTRADO AQUÍ
+builder.Services.AddScoped<IUsuarioService, UsuarioService>();
+builder.Services.AddScoped<IComprobantesService, ComprobantesService>();
+builder.Services.AddScoped<ITesoreriaService, TesoreriaService>();
 
 // CORS
 builder.Services.AddCors(options =>

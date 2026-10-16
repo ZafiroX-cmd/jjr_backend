@@ -236,7 +236,7 @@ namespace JJR.Api.Controllers
             bool esAdminOGerente = userRole.Equals("Administrador", StringComparison.OrdinalIgnoreCase) ||
                                   userRole.Equals("Gerente", StringComparison.OrdinalIgnoreCase);
 
-            // Determinar la oficina que se usará para filtrar vehículos y conductores
+            // Determinar la oficina que se usará para filtrar vehículos, conductores y salidas
             int? oficinaFiltro = oficinaOrigenId;
             if (!esAdminOGerente || !oficinaFiltro.HasValue)
             {
@@ -301,7 +301,33 @@ namespace JJR.Api.Controllers
                 .Select(o => new { o.OficinaId, o.Nombre, o.Direccion })
                 .ToListAsync();
 
-            return Ok(new { rutas, vehiculos, conductores, oficinas });
+            // 🚀 OBTENER SALIDAS/VIAJES PROGRAMADOS ACTIVOS
+            var queryViajes = _context.Viajes
+                .Include(v => v.Ruta)
+                .Include(v => v.Vehiculo)
+                .Include(v => v.Conductor)
+                .Where(v => v.Estado == "Programado" || v.Estado == "En Ruta");
+
+            if (oficinaFiltro.HasValue && oficinaFiltro.Value > 0)
+            {
+                queryViajes = queryViajes.Where(v => v.OficinaOrigenId == oficinaFiltro.Value);
+            }
+
+            var viajes = await queryViajes
+                .OrderBy(v => v.FechaSalida)
+                .Select(v => new
+                {
+                    viajeId = v.ViajeId,
+                    fechaHoraSalida = v.FechaSalida.ToString("dd/MM/yyyy HH:mm"),
+                    origenNombre = v.Ruta.Origen,
+                    destinoNombre = v.Ruta.Destino,
+                    vehiculoPlaca = v.Vehiculo.Placa,
+                    conductorNombre = v.Conductor != null ? v.Conductor.Nombres + " " + v.Conductor.ApellidoPaterno : ""
+                })
+                .ToListAsync();
+
+            // Retornamos todas las entidades incluyendo la propiedad 'viajes'
+            return Ok(new { rutas, vehiculos, conductores, oficinas, viajes });
         }
 
         #endregion
