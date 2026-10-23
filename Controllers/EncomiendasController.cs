@@ -156,6 +156,8 @@ namespace JJR.Api.Controllers
                 viajeGuid = parsedViaje;
             }
 
+            string tipoCobroFinal = dto.PorPagar ? "DESTINO" : "ORIGEN";
+
             var encomienda = new Encomienda
             {
                 EncomiendaId = Guid.NewGuid(),
@@ -166,7 +168,7 @@ namespace JJR.Api.Controllers
                 Descripcion = dto.Descripcion,
                 PesoKg = dto.PesoKg,
                 MontoCobro = dto.PrecioEnvio,
-                TipoCobro = dto.PorPagar ? "DESTINO" : "ORIGEN",
+                TipoCobro = tipoCobroFinal,
                 Estado = viajeGuid.HasValue ? "EN RUTA" : "REGISTRADO",
                 ConfirmadoPorConductor = false,
                 RegistradoPorUsuarioId = usuarioId,
@@ -174,6 +176,32 @@ namespace JJR.Api.Controllers
             };
 
             _context.Encomiendas.Add(encomienda);
+
+            // -----------------------------------------------------------------
+            // 🚀 REGISTRO EN TESORERÍA: Si se paga en ORIGEN al registrar
+            // -----------------------------------------------------------------
+            if (tipoCobroFinal == "ORIGEN" && dto.PrecioEnvio > 0)
+            {
+                var cuentaEmpresa = await _context.CuentasEmpresas
+                    .FirstOrDefaultAsync(c => c.Activo);
+
+                if (cuentaEmpresa != null)
+                {
+                    var movimientoTesoreria = new MovimientosCaja
+                    {
+                        MovimientoId = Guid.NewGuid(),
+                        CuentaId = cuentaEmpresa.CuentaId,
+                        Monto = dto.PrecioEnvio,
+                        Categoria = "ENCOMIENDAS",
+                        Descripcion = $"Envío Encomienda Guía #{codigoGuia} - Pago Origen",
+                        UsuarioRegistroId = usuarioId,
+                        FechaMovimiento = DateTime.UtcNow
+                    };
+
+                    _context.MovimientosCajas.Add(movimientoTesoreria);
+                }
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new { mensaje = "Encomienda registrada correctamente", codigoGuia, encomiendaId = encomienda.EncomiendaId });
@@ -186,6 +214,7 @@ namespace JJR.Api.Controllers
             var enc = await _context.Encomiendas.FindAsync(id);
             if (enc == null) return NotFound("Encomienda no encontrada.");
 
+            string estadoAnterior = enc.Estado;
             enc.Estado = dto.NuevoEstado;
 
             if (!string.IsNullOrEmpty(dto.ViajeId) && Guid.TryParse(dto.ViajeId, out var viajeGuid))
@@ -196,6 +225,35 @@ namespace JJR.Api.Controllers
             if (dto.NuevoEstado == "ENTREGADO")
             {
                 enc.FechaEntrega = DateTime.UtcNow;
+
+                // -----------------------------------------------------------------
+                // 🚀 REGISTRO EN TESORERÍA: Si se cobra en DESTINO al entregar
+                // -----------------------------------------------------------------
+                if (enc.TipoCobro == "DESTINO" && enc.MontoCobro > 0 && estadoAnterior != "ENTREGADO")
+                {
+                    var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                    Guid usuarioId = Guid.Empty;
+                    if (!string.IsNullOrEmpty(userIdStr)) Guid.TryParse(userIdStr, out usuarioId);
+
+                    var cuentaEmpresa = await _context.CuentasEmpresas
+                        .FirstOrDefaultAsync(c => c.Activo);
+
+                    if (cuentaEmpresa != null)
+                    {
+                        var movimientoTesoreria = new MovimientosCaja
+                        {
+                            MovimientoId = Guid.NewGuid(),
+                            CuentaId = cuentaEmpresa.CuentaId,
+                            Monto = enc.MontoCobro,
+                            Categoria = "ENCOMIENDAS",
+                            Descripcion = $"Cobro Encomienda Guía #{enc.CodigoSeguimiento} - Pago Contra Entrega",
+                            UsuarioRegistroId = usuarioId != Guid.Empty ? usuarioId : enc.RegistradoPorUsuarioId,
+                            FechaMovimiento = DateTime.UtcNow
+                        };
+
+                        _context.MovimientosCajas.Add(movimientoTesoreria);
+                    }
+                }
             }
 
             await _context.SaveChangesAsync();

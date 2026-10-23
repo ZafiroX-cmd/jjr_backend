@@ -1,8 +1,10 @@
 ﻿using System.Security.Claims;
 using JJR.Api.DTOs;
+using JJR.Api.Models;
 using JJR.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace JJR.Api.Controllers
 {
@@ -12,10 +14,31 @@ namespace JJR.Api.Controllers
     public class TesoreriaController : ControllerBase
     {
         private readonly ITesoreriaService _tesoreriaService;
+        private readonly JjrDbContext _context;
 
-        public TesoreriaController(ITesoreriaService tesoreriaService)
+        public TesoreriaController(ITesoreriaService tesoreriaService, JjrDbContext context)
         {
             _tesoreriaService = tesoreriaService;
+            _context = context;
+        }
+
+        // GET: api/tesoreria/cuentas (Habilitado para cargar el desplegable en Egresos y Tesorería)
+        [HttpGet("cuentas")]
+        public async Task<IActionResult> ListarCuentas()
+        {
+            var cuentas = await _context.CuentasEmpresas
+                .Where(c => c.Activo)
+                .Select(c => new
+                {
+                    cuentaId = c.CuentaId,
+                    nombreCuenta = c.NombreCuenta,
+                    tipoCuenta = c.TipoCuenta,
+                    saldoActual = c.SaldoActual,
+                    moneda = c.Moneda
+                })
+                .ToListAsync();
+
+            return Ok(cuentas);
         }
 
         [HttpPost("movimientos")]

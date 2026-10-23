@@ -239,6 +239,32 @@ namespace JJR.Api.Controllers
             }
 
             _context.Pasajes.Add(nuevoPasaje);
+
+            // -----------------------------------------------------------------
+            // 🚀 REGISTRO AUTOMÁTICO EN TESORERÍA / CAJA
+            // -----------------------------------------------------------------
+            if (cobrado > 0)
+            {
+                var cuentaEmpresa = await _context.CuentasEmpresas
+                    .FirstOrDefaultAsync(c => c.Activo);
+
+                if (cuentaEmpresa != null)
+                {
+                    var movimientoTesoreria = new MovimientosCaja
+                    {
+                        MovimientoId = Guid.NewGuid(),
+                        CuentaId = cuentaEmpresa.CuentaId,
+                        Monto = cobrado,
+                        Categoria = "VENTA_PASAJES",
+                        Descripcion = $"Venta Pasaje Asiento #{nuevoPasaje.NumeroAsiento} - {model.MedioPago}",
+                        UsuarioRegistroId = usuarioId,
+                        FechaMovimiento = DateTime.UtcNow
+                    };
+
+                    _context.MovimientosCajas.Add(movimientoTesoreria);
+                }
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new
@@ -291,6 +317,15 @@ namespace JJR.Api.Controllers
             pasaje.MontoAdelanto = pasaje.Precio;
             pasaje.Estado = "Emitido";
 
+            var userOficinaClaim = User.FindFirst("OficinaId")?.Value;
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int? oficinaEmisionId = int.TryParse(userOficinaClaim, out int ofId) ? ofId : pasaje.OficinaEmisionId;
+
+            if (!Guid.TryParse(userIdClaim, out Guid usuarioId))
+            {
+                usuarioId = pasaje.CreadoPorUsuarioId;
+            }
+
             // EMISIÓN DEL COMPROBANTE AL LIQUIDAR LA RESERVA
             if (!string.IsNullOrEmpty(model.TipoComprobante))
             {
@@ -298,20 +333,33 @@ namespace JJR.Api.Controllers
                 if (cliente == null)
                     return BadRequest(new { mensaje = "Cliente no encontrado para emitir comprobante." });
 
-                var userOficinaClaim = User.FindFirst("OficinaId")?.Value;
-                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                int? oficinaEmisionId = int.TryParse(userOficinaClaim, out int ofId) ? ofId : pasaje.OficinaEmisionId;
-
-                if (!Guid.TryParse(userIdClaim, out Guid usuarioId))
-                {
-                    usuarioId = pasaje.CreadoPorUsuarioId;
-                }
-
                 var res = await GenerarComprobanteInternoOSunat(pasaje, cliente, model.TipoComprobante.ToUpper(), oficinaEmisionId, usuarioId, apiSunat);
                 if (!res.success)
                 {
                     return BadRequest(new { mensaje = res.error });
                 }
+            }
+
+            // -----------------------------------------------------------------
+            // 🚀 REGISTRO AUTOMÁTICO DE LIQUIDACIÓN DE RESERVA EN TESORERÍA
+            // -----------------------------------------------------------------
+            var cuentaEmpresaReserva = await _context.CuentasEmpresas
+                .FirstOrDefaultAsync(c => c.Activo);
+
+            if (cuentaEmpresaReserva != null)
+            {
+                var movimientoReservaTesoreria = new MovimientosCaja
+                {
+                    MovimientoId = Guid.NewGuid(),
+                    CuentaId = cuentaEmpresaReserva.CuentaId,
+                    Monto = saldoPendiente,
+                    Categoria = "VENTA_PASAJES",
+                    Descripcion = $"Cancelación Saldo Reserva Asiento #{pasaje.NumeroAsiento} - {model.MedioPago}",
+                    UsuarioRegistroId = usuarioId,
+                    FechaMovimiento = DateTime.UtcNow
+                };
+
+                _context.MovimientosCajas.Add(movimientoReservaTesoreria);
             }
 
             await _context.SaveChangesAsync();
@@ -472,34 +520,34 @@ namespace JJR.Api.Controllers
         }
 
         #endregion
+
+        #region --- DTOs ---
+
+        public class VentaPasajeFormDto
+        {
+            public Guid ViajeId { get; set; }
+            public int NumeroAsiento { get; set; }
+            public Guid ClientePasajeroId { get; set; }
+            public Guid? ClienteFacturacionId { get; set; }
+            public int OrigenParadaId { get; set; }
+            public int DestinoParadaId { get; set; }
+            public decimal Precio { get; set; }
+            public string TipoOperacion { get; set; } = "VENTA_DIRECTA";
+            public decimal MontoAdelanto { get; set; } = 0.00m;
+            public string MedioPago { get; set; } = "EFECTIVO";
+            public string? NumeroOperacion { get; set; }
+            public IFormFile? VoucherFile { get; set; }
+            public string? TipoComprobante { get; set; }
+        }
+
+        public class LiquidarReservaDto
+        {
+            public decimal MontoPago { get; set; }
+            public string MedioPago { get; set; } = "EFECTIVO";
+            public IFormFile? VoucherFile { get; set; }
+            public string? TipoComprobante { get; set; }
+        }
+
+        #endregion
     }
-
-    #region --- DTOs ---
-
-    public class VentaPasajeFormDto
-    {
-        public Guid ViajeId { get; set; }
-        public int NumeroAsiento { get; set; }
-        public Guid ClientePasajeroId { get; set; }
-        public Guid? ClienteFacturacionId { get; set; }
-        public int OrigenParadaId { get; set; }
-        public int DestinoParadaId { get; set; }
-        public decimal Precio { get; set; }
-        public string TipoOperacion { get; set; } = "VENTA_DIRECTA";
-        public decimal MontoAdelanto { get; set; } = 0.00m;
-        public string MedioPago { get; set; } = "EFECTIVO";
-        public string? NumeroOperacion { get; set; }
-        public IFormFile? VoucherFile { get; set; }
-        public string? TipoComprobante { get; set; } // "NOTA_VENTA", "BOLETA", "FACTURA"
-    }
-
-    public class LiquidarReservaDto
-    {
-        public decimal MontoPago { get; set; }
-        public string MedioPago { get; set; } = "EFECTIVO";
-        public IFormFile? VoucherFile { get; set; }
-        public string? TipoComprobante { get; set; } // "NOTA_VENTA", "BOLETA", "FACTURA"
-    }
-
-    #endregion
 }

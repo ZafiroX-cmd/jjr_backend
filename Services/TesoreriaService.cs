@@ -13,6 +13,21 @@ namespace JJR.Api.Services
             _context = context;
         }
 
+        public async Task<IEnumerable<CuentaEmpresaDto>> ListarCuentasAsync()
+        {
+            return await _context.CuentasEmpresas
+                .Where(c => c.Activo)
+                .Select(c => new CuentaEmpresaDto
+                {
+                    CuentaId = c.CuentaId,
+                    NombreCuenta = c.NombreCuenta,
+                    TipoCuenta = c.TipoCuenta,
+                    SaldoActual = c.SaldoActual,
+                    Moneda = c.Moneda
+                })
+                .ToListAsync();
+        }
+
         public async Task<MovimientoCajaResponseDto> RegistrarMovimientoAsync(RegistrarMovimientoRequestDto dto, Guid usuarioId)
         {
             if (!dto.CuentaEmpresaId.HasValue || dto.CuentaEmpresaId == Guid.Empty)
@@ -32,6 +47,21 @@ namespace JJR.Api.Services
             };
 
             _context.MovimientosCajas.Add(movimiento);
+
+            // Actualizar saldo de la cuenta según el tipo de movimiento
+            var cuenta = await _context.CuentasEmpresas.FindAsync(dto.CuentaEmpresaId.Value);
+            if (cuenta != null)
+            {
+                if (dto.TipoMovimiento.ToUpper() == "INGRESO")
+                {
+                    cuenta.SaldoActual += dto.Monto;
+                }
+                else if (dto.TipoMovimiento.ToUpper() == "EGRESO")
+                {
+                    cuenta.SaldoActual -= dto.Monto;
+                }
+            }
+
             await _context.SaveChangesAsync();
 
             // Cargar datos de navegación para la respuesta
@@ -57,7 +87,7 @@ namespace JJR.Api.Services
                 .Include(m => m.Cuenta)
                 .AsQueryable();
 
-            if (filtro.TipoMovimiento != null)
+            if (!string.IsNullOrWhiteSpace(filtro.TipoMovimiento))
             {
                 query = query.Where(m => m.Categoria.ToUpper() == filtro.TipoMovimiento.ToUpper());
             }
@@ -69,7 +99,7 @@ namespace JJR.Api.Services
 
             if (filtro.FechaFin.HasValue)
             {
-                query = query.Where(m => m.FechaMovimiento <= filtro.FechaFin.Value);
+                query = query.Where(m => m.FechaMovimiento <= filtro.FechaFin.Value.AddDays(1));
             }
 
             return await query

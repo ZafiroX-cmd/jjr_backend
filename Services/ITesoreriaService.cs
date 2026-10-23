@@ -7,5 +7,6 @@ namespace JJR.Api.Services
         Task<MovimientoCajaResponseDto> RegistrarMovimientoAsync(RegistrarMovimientoRequestDto dto, Guid usuarioId);
         Task<IEnumerable<MovimientoCajaResponseDto>> ListarMovimientosAsync(MovimientoFiltroDto filtro);
         Task<MovimientoCajaResponseDto?> ObtenerPorIdAsync(Guid movimientoId);
+        Task<IEnumerable<CuentaEmpresaDto>> ListarCuentasAsync(); 
     }
 }
