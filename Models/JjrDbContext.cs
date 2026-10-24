@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
+using Npgsql.NameTranslation;
 
 namespace JJR.Api.Models;
 
@@ -71,9 +72,10 @@ public partial class JjrDbContext : DbContext
             .HasPostgresEnum("pagado_por_enum", new[] { "EMPRESA_ADMINISTRACION", "SOCIO_PROPIETARIO" })
             .HasPostgresEnum("tipo_documento_enum", new[] { "DNI", "RUC", "CE", "PASAPORTE" })
             .HasPostgresEnum("tipo_empleado_enum", new[] { "COUNTER", "CONDUCTOR", "ADMINISTRATIVO" })
-            .HasPostgresEnum("tipo_movimiento_enum", new[] { "INGRESO", "EGRESO" })
             .HasPostgresEnum("tipo_persona_enum", new[] { "NATURAL", "JURIDICA" })
             .HasPostgresExtension("uuid-ossp");
+
+        modelBuilder.HasPostgresEnum<TipoMovimientoCaja>(null, "tipo_movimiento_enum", new NpgsqlNullNameTranslator());
 
         modelBuilder.Entity<AdelantosDescuento>(entity =>
         {
