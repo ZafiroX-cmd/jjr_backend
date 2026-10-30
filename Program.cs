@@ -14,6 +14,7 @@ builder.Services.AddDbContext<JjrDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // Registro de Servicios
+builder.Services.AddHttpClient();
 builder.Services.AddHttpClient<ApiSunatService>();
 builder.Services.AddScoped<IUsuarioService, UsuarioService>();
 builder.Services.AddScoped<IComprobantesService, ComprobantesService>();

@@ -71,7 +71,6 @@ public partial class JjrDbContext : DbContext
             .HasPostgresEnum("pagado_por_enum", new[] { "EMPRESA_ADMINISTRACION", "SOCIO_PROPIETARIO" })
             .HasPostgresEnum("tipo_documento_enum", new[] { "DNI", "RUC", "CE", "PASAPORTE" })
             .HasPostgresEnum("tipo_empleado_enum", new[] { "COUNTER", "CONDUCTOR", "ADMINISTRATIVO" })
-            .HasPostgresEnum("tipo_movimiento_enum", new[] { "INGRESO", "EGRESO" })
             .HasPostgresEnum("tipo_persona_enum", new[] { "NATURAL", "JURIDICA" })
             .HasPostgresExtension("uuid-ossp");
 
@@ -251,6 +250,9 @@ public partial class JjrDbContext : DbContext
 
             entity.Property(e => e.MovimientoId).HasDefaultValueSql("uuid_generate_v4()");
             entity.Property(e => e.FechaMovimiento).HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+            entity.Property(e => e.TipoMovimiento)
+                .HasColumnName("tipo_movimiento");
 
             entity.HasOne(d => d.Cuenta).WithMany(p => p.MovimientosCajas)
                 .OnDelete(DeleteBehavior.ClientSetNull)

@@ -236,12 +236,24 @@ namespace JJR.Api.Controllers
             bool esAdminOGerente = userRole.Equals("Administrador", StringComparison.OrdinalIgnoreCase) ||
                                   userRole.Equals("Gerente", StringComparison.OrdinalIgnoreCase);
 
-            // Determinar la oficina que se usará para filtrar vehículos, conductores y salidas
             int? oficinaFiltro = oficinaOrigenId;
             if (!esAdminOGerente || !oficinaFiltro.HasValue)
             {
                 oficinaFiltro = oficinaFiltro ?? oficinaUsuarioClaim;
             }
+
+            // 1. Obtener IDs de vehículos y conductores que ya se encuentran en un viaje activo o programado
+            var vehiculosOcupadosIds = await _context.Viajes
+                .Where(v => v.Estado == "Programado" || v.Estado == "En Ruta")
+                .Select(v => v.VehiculoId)
+                .Distinct()
+                .ToListAsync();
+
+            var conductoresOcupadosIds = await _context.Viajes
+                .Where(v => v.Estado == "Programado" || v.Estado == "En Ruta")
+                .Select(v => v.ConductorId)
+                .Distinct()
+                .ToListAsync();
 
             var rutas = await _context.Rutas
                 .Where(r => r.Activo)
@@ -266,25 +278,26 @@ namespace JJR.Api.Controllers
                 })
                 .ToListAsync();
 
-            // Consulta de Vehículos: Se exige que coincida con la oficina requerida
+            // 2. Consulta de Vehículos: Activos, en la oficina física requerida y libre de viajes
             var queryVehiculos = _context.Vehiculos
-                .Where(v => v.Activo && (v.Estado == "Operativo" || v.Estado == "Disponible"));
+                .Where(v => v.Activo && (v.Estado == "Operativo" || v.Estado == "Disponible") && !vehiculosOcupadosIds.Contains(v.VehiculoId));
 
             if (oficinaFiltro.HasValue && oficinaFiltro.Value > 0)
             {
-                queryVehiculos = queryVehiculos.Where(v => v.OficinaActualId == oficinaFiltro.Value || v.OficinaActualId == null);
+                queryVehiculos = queryVehiculos.Where(v => v.OficinaActualId == oficinaFiltro.Value);
             }
 
             var vehiculos = await queryVehiculos
                 .Select(v => new { v.VehiculoId, v.Placa, v.Marca, v.OficinaActualId })
                 .ToListAsync();
 
-            // Consulta de Conductores: Se exige que coincida con la oficina requerida
-            var queryConductores = _context.Conductores.Where(c => c.Activo);
+            // 3. Consulta de Conductores: Activos, en la oficina física requerida y libre de viajes
+            var queryConductores = _context.Conductores
+                .Where(c => c.Activo && !conductoresOcupadosIds.Contains(c.ConductorId));
 
             if (oficinaFiltro.HasValue && oficinaFiltro.Value > 0)
             {
-                queryConductores = queryConductores.Where(c => c.OficinaActualId == oficinaFiltro.Value || c.OficinaActualId == null);
+                queryConductores = queryConductores.Where(c => c.OficinaActualId == oficinaFiltro.Value);
             }
 
             var conductores = await queryConductores
@@ -301,7 +314,6 @@ namespace JJR.Api.Controllers
                 .Select(o => new { o.OficinaId, o.Nombre, o.Direccion })
                 .ToListAsync();
 
-            // 🚀 OBTENER SALIDAS/VIAJES PROGRAMADOS ACTIVOS
             var queryViajes = _context.Viajes
                 .Include(v => v.Ruta)
                 .Include(v => v.Vehiculo)
@@ -326,7 +338,6 @@ namespace JJR.Api.Controllers
                 })
                 .ToListAsync();
 
-            // Retornamos todas las entidades incluyendo la propiedad 'viajes'
             return Ok(new { rutas, vehiculos, conductores, oficinas, viajes });
         }
 

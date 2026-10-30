@@ -48,7 +48,6 @@ namespace JJR.Api.Controllers
                 })
                 .ToListAsync();
 
-            // Obtenemos todos los pasajeIds ocupados para consultar sus comprobantes
             var pasajeIds = viaje.Pasajes.Where(p => p.Estado != "Anulado").Select(p => p.PasajeId).ToList();
 
             var comprobantes = await _context.ComprobantesPagos
@@ -76,7 +75,6 @@ namespace JJR.Api.Controllers
                     var comprobante = comprobantes.FirstOrDefault(c => c.PasajeId == pasaje.PasajeId);
                     if (comprobante != null)
                     {
-                        // Formatea la Serie y el Número correlativo de 8 dígitos
                         numeroComprobanteFormat = $"{comprobante.Serie} - {comprobante.Numero:D8}";
 
                         tipoComprobanteFormat = comprobante.Documento.ToLower() switch
@@ -93,7 +91,7 @@ namespace JJR.Api.Controllers
                     numeroAsiento = numAsiento,
                     ubicacion = ubicacionNombre,
                     ocupado = pasaje != null,
-                    estado = pasaje != null ? pasaje.Estado : "Disponible", // 'Reservado' o 'Emitido'
+                    estado = pasaje != null ? pasaje.Estado : "Disponible",
                     tipoOperacion = pasaje?.TipoOperacion,
                     precioTotal = pasaje?.Precio ?? 0,
                     montoAdelanto = pasaje?.MontoAdelanto ?? 0,
@@ -103,7 +101,6 @@ namespace JJR.Api.Controllers
                     comprobantePagoUrl = pasaje?.ComprobantePagoUrl,
                     comprobanteEmitido = pasaje?.ComprobanteEmitido ?? false,
 
-                    // Datos para el ticket de impresión
                     numeroComprobante = numeroComprobanteFormat,
                     tipoComprobante = tipoComprobanteFormat,
 
@@ -254,6 +251,7 @@ namespace JJR.Api.Controllers
                     {
                         MovimientoId = Guid.NewGuid(),
                         CuentaId = cuentaEmpresa.CuentaId,
+                        TipoMovimiento = "INGRESO",
                         Monto = cobrado,
                         Categoria = "VENTA_PASAJES",
                         Descripcion = $"Venta Pasaje Asiento #{nuevoPasaje.NumeroAsiento} - {model.MedioPago}",
@@ -352,6 +350,7 @@ namespace JJR.Api.Controllers
                 {
                     MovimientoId = Guid.NewGuid(),
                     CuentaId = cuentaEmpresaReserva.CuentaId,
+                    TipoMovimiento = "INGRESO",
                     Monto = saldoPendiente,
                     Categoria = "VENTA_PASAJES",
                     Descripcion = $"Cancelación Saldo Reserva Asiento #{pasaje.NumeroAsiento} - {model.MedioPago}",
