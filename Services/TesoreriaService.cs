@@ -35,13 +35,20 @@ namespace JJR.Api.Services
                 throw new ArgumentException("Debe especificar una cuenta de empresa válida (CuentaEmpresaId).");
             }
 
+            if (string.IsNullOrWhiteSpace(dto.TipoMovimiento)
+                || !Enum.TryParse(dto.TipoMovimiento.Trim(), ignoreCase: true, out TipoMovimientoCaja tipoMovimiento))
+            {
+                throw new ArgumentException("TipoMovimiento debe ser INGRESO o EGRESO.");
+            }
+
             var movimiento = new MovimientosCaja
             {
                 MovimientoId = Guid.NewGuid(),
                 CuentaId = dto.CuentaEmpresaId.Value,
                 UsuarioRegistroId = usuarioId,
                 Monto = dto.Monto,
-                Categoria = dto.TipoMovimiento.ToUpper(), // INGRESO, EGRESO, APERTURA, etc.
+                TipoMovimiento = tipoMovimiento,
+                Categoria = "TESORERIA",
                 Descripcion = dto.Concepto,
                 FechaMovimiento = DateTime.Now
             };
@@ -52,11 +59,11 @@ namespace JJR.Api.Services
             var cuenta = await _context.CuentasEmpresas.FindAsync(dto.CuentaEmpresaId.Value);
             if (cuenta != null)
             {
-                if (dto.TipoMovimiento.ToUpper() == "INGRESO")
+                if (tipoMovimiento == TipoMovimientoCaja.INGRESO)
                 {
                     cuenta.SaldoActual += dto.Monto;
                 }
-                else if (dto.TipoMovimiento.ToUpper() == "EGRESO")
+                else if (tipoMovimiento == TipoMovimientoCaja.EGRESO)
                 {
                     cuenta.SaldoActual -= dto.Monto;
                 }
@@ -71,7 +78,7 @@ namespace JJR.Api.Services
             {
                 MovimientoId = movimiento.MovimientoId,
                 FechaHora = movimiento.FechaMovimiento,
-                TipoMovimiento = movimiento.Categoria,
+                TipoMovimiento = movimiento.TipoMovimiento.ToString(),
                 Concepto = movimiento.Descripcion,
                 Monto = movimiento.Monto,
                 MedioPago = dto.MedioPago,
@@ -87,9 +94,10 @@ namespace JJR.Api.Services
                 .Include(m => m.Cuenta)
                 .AsQueryable();
 
-            if (!string.IsNullOrWhiteSpace(filtro.TipoMovimiento))
+            if (!string.IsNullOrWhiteSpace(filtro.TipoMovimiento)
+                && Enum.TryParse(filtro.TipoMovimiento.Trim(), ignoreCase: true, out TipoMovimientoCaja tipoFiltro))
             {
-                query = query.Where(m => m.Categoria.ToUpper() == filtro.TipoMovimiento.ToUpper());
+                query = query.Where(m => m.TipoMovimiento == tipoFiltro);
             }
 
             if (filtro.FechaInicio.HasValue)
@@ -108,7 +116,7 @@ namespace JJR.Api.Services
                 {
                     MovimientoId = m.MovimientoId,
                     FechaHora = m.FechaMovimiento,
-                    TipoMovimiento = m.Categoria,
+                    TipoMovimiento = m.TipoMovimiento == TipoMovimientoCaja.INGRESO ? "INGRESO" : "EGRESO",
                     Concepto = m.Descripcion,
                     Monto = m.Monto,
                     MedioPago = "EFECTIVO",
@@ -133,7 +141,7 @@ namespace JJR.Api.Services
             {
                 MovimientoId = m.MovimientoId,
                 FechaHora = m.FechaMovimiento,
-                TipoMovimiento = m.Categoria,
+                TipoMovimiento = m.TipoMovimiento.ToString(),
                 Concepto = m.Descripcion,
                 Monto = m.Monto,
                 MedioPago = "EFECTIVO",

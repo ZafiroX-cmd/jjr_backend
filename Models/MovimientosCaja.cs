@@ -24,6 +24,9 @@ public partial class MovimientosCaja
     [Precision(10, 2)]
     public decimal Monto { get; set; }
 
+    [Column("tipo_movimiento")]
+    public TipoMovimientoCaja TipoMovimiento { get; set; }
+
     [Column("categoria")]
     [StringLength(50)]
     public string Categoria { get; set; } = null!;

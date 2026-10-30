@@ -122,6 +122,7 @@ namespace JJR.Api.Controllers
                 MovimientoId = Guid.NewGuid(),
                 CuentaId = dto.CuentaId,
                 Monto = dto.Monto,
+                TipoMovimiento = TipoMovimientoCaja.EGRESO,
                 Categoria = dto.Categoria.ToUpper(),
                 Descripcion = $"EGRESO OPERATIVO - {dto.Categoria.ToUpper()}: {dto.Descripcion}",
                 UsuarioRegistroId = usuarioId,
