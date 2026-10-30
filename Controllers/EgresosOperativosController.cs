@@ -107,7 +107,7 @@ namespace JJR.Api.Controllers
                 ViajeId = dto.ViajeId,
                 Categoria = dto.Categoria.ToUpper(),
                 Monto = dto.Monto,
-                Descripcion = dto.Descripcion,
+                Descripcion = dto.Descripcion ?? string.Empty,
                 UrlFotoComprobante = comprobanteUrl,
                 ValidadoPorAdmin = false,
                 RegistradoPorUsuarioId = usuarioId,
@@ -122,7 +122,7 @@ namespace JJR.Api.Controllers
                 MovimientoId = Guid.NewGuid(),
                 CuentaId = dto.CuentaId,
                 Monto = dto.Monto,
-                TipoMovimiento = TipoMovimientoCaja.EGRESO,
+                TipoMovimiento = "EGRESO", // 👈 String en lugar de enum
                 Categoria = dto.Categoria.ToUpper(),
                 Descripcion = $"EGRESO OPERATIVO - {dto.Categoria.ToUpper()}: {dto.Descripcion}",
                 UsuarioRegistroId = usuarioId,
